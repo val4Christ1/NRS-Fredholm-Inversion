@@ -23,14 +23,14 @@ t_min    = st.sidebar.number_input("Time t min (s)",     min_value=1e-4, value=1
 t_max    = st.sidebar.number_input("Time t max (s)",     min_value=1e-3, value=10.0,  format="%.2f")
 N_t      = st.sidebar.number_input("Number of t points", min_value=100,  value=1500, step=100)
 
-# T1 values
-T1_min   = st.sidebar.number_input("T1 min (s)",         min_value=1e-4, value=1e-2, format="%.4f")
-T1_max   = st.sidebar.number_input("T1 max (s)",         min_value=1e-3, value=100.0, format="%.1f")
+# T1 values in log10 space - allowing any values
+log10_T1_min = st.sidebar.number_input("log10(T1) min", value=-2.0, format="%.2f")
+log10_T1_max = st.sidebar.number_input("log10(T1) max", value=2.0, format="%.2f")
 N_T1     = st.sidebar.number_input("Number of T1 values",min_value=10,   value=50,   step=5)
 
-# T2 values
-T2_min   = st.sidebar.number_input("T2 min (s)",         min_value=1e-4, value=1e-2, format="%.4f")
-T2_max   = st.sidebar.number_input("T2 max (s)",         min_value=1e-3, value=100.0, format="%.1f")
+# T2 values in log10 space - allowing any values
+log10_T2_min = st.sidebar.number_input("log10(T2) min", value=-2.0, format="%.2f")
+log10_T2_max = st.sidebar.number_input("log10(T2) max", value=2.0, format="%.2f")
 N_T2     = st.sidebar.number_input("Number of T2 values",min_value=10,   value=50,   step=5)
 
 st.sidebar.markdown("---")
@@ -67,10 +67,16 @@ plot_type_options = ["contourf", "contour"]
 plot_type_true = st.sidebar.selectbox("True Distribution Plot Type", plot_type_options, index=0)
 plot_type_rec = st.sidebar.selectbox("Reconstructed Distribution Plot Type", plot_type_options, index=0)
 
-# Generate sampling vectors
+# Generate sampling vectors - convert from log10 space to actual T1/T2 values
 time_points = np.logspace(np.log10(t_min), np.log10(t_max), int(N_t))
-T1_vals     = np.logspace(np.log10(T1_min), np.log10(T1_max), int(N_T1))
-T2_vals     = np.logspace(np.log10(T2_min), np.log10(T2_max), int(N_T2))
+T1_vals = np.logspace(log10_T1_min, log10_T1_max, int(N_T1))
+T2_vals = np.logspace(log10_T2_min, log10_T2_max, int(N_T2))
+
+# Display actual T1/T2 ranges being used
+st.sidebar.markdown("---")
+st.sidebar.header("Actual T1/T2 Ranges")
+st.sidebar.write(f"T1 range: {T1_vals[0]:.4e} to {T1_vals[-1]:.4e} s")
+st.sidebar.write(f"T2 range: {T2_vals[0]:.4e} to {T2_vals[-1]:.4e} s")
 
 # Create grids
 T1_grid, T2_grid = np.meshgrid(T1_vals, T2_vals, indexing='ij')
@@ -104,24 +110,36 @@ def invert_fredholm(S, time_points, T1_grid, T2_grid, method, reg_param):
         # Tikhonov regularization
         K_reg = np.vstack([K, reg_param * np.eye(nK)])
         S_reg = np.hstack([S, np.zeros(nK)])
-        res = lsq_linear(K_reg, S_reg, bounds=(0, np.inf), lsmr_tol='auto', verbose=0)
-        return res.x.reshape(T1_grid.shape)
+        try:
+            res = lsq_linear(K_reg, S_reg, bounds=(0, np.inf), lsmr_tol='auto', verbose=0)
+            return res.x.reshape(T1_grid.shape)
+        except np.linalg.LinAlgError:
+            st.error("SVD did not converge in Linear Least Squares. Try increasing regularization parameter or changing method.")
+            return np.zeros(T1_grid.shape)
     
     elif method == "Non-negative LS":
         # Standard non-negative least squares
-        res = lsq_linear(K, S, bounds=(0, np.inf), lsmr_tol='auto', verbose=0)
-        return res.x.reshape(T1_grid.shape)
+        try:
+            res = lsq_linear(K, S, bounds=(0, np.inf), lsmr_tol='auto', verbose=0)
+            return res.x.reshape(T1_grid.shape)
+        except np.linalg.LinAlgError:
+            st.error("SVD did not converge in Linear Least Squares. Try increasing regularization parameter or changing method.")
+            return np.zeros(T1_grid.shape)
     
     elif method == "Truncated SVD":
         # Truncated SVD (pseudo-inverse with threshold)
-        U, s, Vt = np.linalg.svd(K, full_matrices=False)
-        s_inv = np.zeros_like(s)
-        threshold = reg_param * np.max(s)
-        s_inv[s > threshold] = 1 / s[s > threshold]
-        K_inv = Vt.T @ np.diag(s_inv) @ U.T
-        f_rec = K_inv @ S
-        f_rec[f_rec < 0] = 0  # Apply non-negativity constraint
-        return f_rec.reshape(T1_grid.shape)
+        try:
+            U, s, Vt = np.linalg.svd(K, full_matrices=False)
+            s_inv = np.zeros_like(s)
+            threshold = reg_param * np.max(s)
+            s_inv[s > threshold] = 1 / s[s > threshold]
+            K_inv = Vt.T @ np.diag(s_inv) @ U.T
+            f_rec = K_inv @ S
+            f_rec[f_rec < 0] = 0  # Apply non-negativity constraint
+            return f_rec.reshape(T1_grid.shape)
+        except np.linalg.LinAlgError:
+            st.error("SVD did not converge. Try increasing regularization parameter or changing method.")
+            return np.zeros(T1_grid.shape)
 
 # Perform inversion with timing
 start_time = time.time()
@@ -209,9 +227,12 @@ ax5.grid(True, which="both", ls="-", alpha=0.2)
 # Residual plot
 ax6 = plt.subplot(2, 3, 6)
 residual = f_rec - f_true
-residual_norm = np.abs(residual) / np.max(np.abs(residual))  # Normalized residual
-im = ax6.imshow(residual_norm, extent=[np.log10(T2_min), np.log10(T2_max), 
-                                       np.log10(T1_max), np.log10(T1_min)], 
+if np.max(np.abs(residual)) > 0:
+    residual_norm = np.abs(residual) / np.max(np.abs(residual))  # Normalized residual
+else:
+    residual_norm = np.zeros_like(residual)
+im = ax6.imshow(residual_norm, extent=[np.log10(T2_vals[0]), np.log10(T2_vals[-1]), 
+                                       np.log10(T1_vals[-1]), np.log10(T1_vals[0])], 
                 aspect='auto', cmap=cmap_res)
 ax6.set_xlabel("log₁₀(T₂)")
 ax6.set_ylabel("log₁₀(T₁)")
