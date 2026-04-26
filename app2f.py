@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 from scipy.optimize import lsq_linear, nnls
 import streamlit as st
 import time
+import io
 
 st.set_page_config(layout="wide")
 
@@ -268,6 +269,65 @@ cbar3.ax.tick_params(labelsize=13)
 
 plt.tight_layout()
 st.pyplot(fig)
+
+# ── Download Tab ─────────────────────────────────────────────────────────────
+st.markdown("---")
+st.subheader("📥 Download Plots")
+
+fname_stem = (
+    f"NMR_{reg_method.replace(' ', '_')}_"
+    f"lam{reg_param:.0e}_"
+    f"noise{'on' if add_noise else 'off'}"
+)
+
+def fig_to_bytes(figure, fmt):
+    buf = io.BytesIO()
+    figure.savefig(buf, format=fmt, bbox_inches="tight", dpi=plot_dpi)
+    buf.seek(0)
+    return buf.read()
+
+col_dl1, col_dl2, col_dl3, col_dl4 = st.columns(4)
+
+with col_dl1:
+    st.download_button(
+        label="⬇ PNG (raster)",
+        data=fig_to_bytes(fig, "png"),
+        file_name=f"{fname_stem}.png",
+        mime="image/png",
+        use_container_width=True,
+    )
+
+with col_dl2:
+    st.download_button(
+        label="⬇ PDF (vector)",
+        data=fig_to_bytes(fig, "pdf"),
+        file_name=f"{fname_stem}.pdf",
+        mime="application/pdf",
+        use_container_width=True,
+    )
+
+with col_dl3:
+    st.download_button(
+        label="⬇ SVG (vector)",
+        data=fig_to_bytes(fig, "svg"),
+        file_name=f"{fname_stem}.svg",
+        mime="image/svg+xml",
+        use_container_width=True,
+    )
+
+with col_dl4:
+    st.download_button(
+        label="⬇ EPS (print)",
+        data=fig_to_bytes(fig, "eps"),
+        file_name=f"{fname_stem}.eps",
+        mime="application/postscript",
+        use_container_width=True,
+    )
+
+st.caption(
+    f"All downloads use the current DPI setting ({plot_dpi} dpi) and include "
+    "every subplot in the figure exactly as displayed above."
+)
 
 # Additional info
 st.subheader("Inversion Details")
